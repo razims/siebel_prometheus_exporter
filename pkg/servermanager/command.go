@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/razims/siebel_exporter/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // SendCommand sends a command to srvrmgr and waits for a response with default timeout
@@ -22,10 +25,13 @@ func (sm *ServerManager) SendCommandWithTimeout(command string, timeout time.Dur
 			time.Sleep(500 * time.Millisecond)
 			if sm.GetStatus() == Connected {
 				// Reconnected successfully, continue with command
+				logger.Debug("Connection restored, proceeding with command")
 			} else {
+				logger.Warn("Cannot send command while reconnecting", zap.String("status", string(status)))
 				return nil, fmt.Errorf("cannot send command while reconnecting")
 			}
 		} else {
+			logger.Warn("Cannot send command: not connected", zap.String("status", string(status)))
 			return nil, fmt.Errorf("cannot send command: not connected (status: %s)", status)
 		}
 	}
@@ -50,7 +56,7 @@ func (sm *ServerManager) SendCommandWithTimeout(command string, timeout time.Dur
 
 				if currentStatus == Connected {
 					// Command failed with pipe error but we thought we were connected
-					fmt.Println("Pipe error detected, initiating reconnection...")
+					logger.Warn("Pipe error detected, initiating reconnection", zap.Error(err))
 					go sm.tryReconnect()
 				}
 			}
@@ -65,6 +71,8 @@ func (sm *ServerManager) SendCommandWithTimeout(command string, timeout time.Dur
 
 // sendCommandWithContext sends a command to srvrmgr with context for timeout/cancellation
 func (sm *ServerManager) sendCommandWithContext(ctx context.Context, command string) ([]string, error) {
+	logger.Debug("Sending command", zap.String("command", command))
+
 	sm.mu.Lock()
 
 	// Check if we're connected before sending
@@ -87,6 +95,7 @@ func (sm *ServerManager) sendCommandWithContext(ctx context.Context, command str
 	if err != nil {
 		// Pipe closed or other write error
 		sm.mu.Unlock()
+		logger.Error("Error writing to stdin", zap.Error(err))
 		sm.handlePipeError()
 		return nil, fmt.Errorf("stdin write error: %v", err)
 	}
@@ -95,6 +104,7 @@ func (sm *ServerManager) sendCommandWithContext(ctx context.Context, command str
 	if err != nil {
 		// Pipe closed or other flush error
 		sm.mu.Unlock()
+		logger.Error("Error flushing stdin", zap.Error(err))
 		sm.handlePipeError()
 		return nil, fmt.Errorf("stdin flush error: %v", err)
 	}
@@ -108,6 +118,7 @@ func (sm *ServerManager) sendCommandWithContext(ctx context.Context, command str
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Warn("Command timed out waiting for prompt", zap.String("command", command))
 			return output, fmt.Errorf("timeout: waiting for prompt from srvrmgr")
 		case <-time.After(100 * time.Millisecond):
 			sm.mu.Lock()
@@ -138,6 +149,9 @@ func (sm *ServerManager) sendCommandWithContext(ctx context.Context, command str
 					// Update last activity time
 					sm.lastActivity = time.Now()
 					sm.mu.Unlock()
+					logger.Debug("Command completed successfully",
+						zap.String("command", command),
+						zap.Int("outputLines", len(output)))
 					return removeDuplicates(output), nil
 				}
 
@@ -157,6 +171,7 @@ func (sm *ServerManager) sendCommandWithContext(ctx context.Context, command str
 
 				// Append stderr lines to output
 				output = append(output, line)
+				logger.Warn("Received stderr output", zap.String("line", line))
 				sm.mu.Unlock()
 				continue
 			}

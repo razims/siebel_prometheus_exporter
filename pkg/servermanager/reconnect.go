@@ -2,8 +2,10 @@ package servermanager
 
 import (
 	"context"
-	"fmt"
 	"time"
+
+	"github.com/razims/siebel_exporter/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // startHeartbeatChecker starts a goroutine that periodically checks if the connection is still alive
@@ -68,8 +70,9 @@ func (sm *ServerManager) checkConnectionHealth() bool {
 		// The error could be due to pipe closed or timeout
 		if err != nil {
 			// Log the health check failure
-			fmt.Printf("Connection health check failed after %v of inactivity: %v\n",
-				inactivityDuration.Round(time.Second), err)
+			logger.Debug("Connection health check failed",
+				zap.Duration("inactivity", inactivityDuration.Round(time.Second)),
+				zap.Error(err))
 			return false
 		}
 
@@ -97,7 +100,7 @@ func (sm *ServerManager) tryReconnect() {
 	sm.status = Reconnecting
 	sm.mu.Unlock()
 
-	fmt.Println("Attempting to reconnect to Siebel Server Manager...")
+	logger.Info("Attempting to reconnect to Siebel Server Manager")
 
 	// Create a new stopReconnect channel
 	sm.mu.Lock()
@@ -128,11 +131,13 @@ func (sm *ServerManager) tryReconnect() {
 				// Try to connect
 				err := sm.connect()
 				if err == nil {
-					fmt.Println("Successfully reconnected to Siebel Server Manager")
+					logger.Info("Successfully reconnected to Siebel Server Manager")
 					return
 				}
 
-				fmt.Printf("Reconnection failed: %v. Retrying in %v...\n", err, delay)
+				logger.Warn("Reconnection failed, will retry",
+					zap.Error(err),
+					zap.Duration("delay", delay))
 
 				// Wait before retry
 				select {

@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/razims/siebel_exporter/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // connect is the internal connection method that uses stored config
@@ -20,6 +23,11 @@ func (sm *ServerManager) connect() error {
 	sm.status = Connecting
 	config := sm.config // Make a local copy to use after unlocking
 	sm.mu.Unlock()
+
+	logger.Debug("Connecting to Siebel Server Manager",
+		zap.String("gateway", config.Gateway),
+		zap.String("enterprise", config.Enterprise),
+		zap.String("server", config.Server))
 
 	args := []string{
 		"-g", config.Gateway,
@@ -91,6 +99,7 @@ func (sm *ServerManager) connect() error {
 				strings.Contains(strings.ToLower(line), "failed") {
 				sm.status = ConnectionError
 				sm.mu.Unlock()
+				logger.Error("Connection error detected in stderr output", zap.String("error", line))
 				return fmt.Errorf("connection error: %s", line)
 			}
 		}
@@ -104,6 +113,7 @@ func (sm *ServerManager) connect() error {
 	// Start the heartbeat checker if reconnection is enabled
 	sm.startHeartbeatChecker()
 
+	logger.Info("Successfully connected to Siebel Server Manager")
 	return nil
 }
 
@@ -129,6 +139,8 @@ func (sm *ServerManager) Disconnect() error {
 
 	sm.status = Disconnecting
 	sm.mu.Unlock()
+
+	logger.Debug("Disconnecting from Siebel Server Manager")
 
 	// Try to send exit command with short timeout
 	// Ignore pipe errors since we're disconnecting anyway
@@ -157,9 +169,10 @@ func (sm *ServerManager) Disconnect() error {
 	select {
 	case <-outputWaitChan:
 		// Output readers completed successfully
+		logger.Debug("Output readers completed")
 	case <-time.After(3 * time.Second):
 		// Timed out waiting for readers - continue with cleanup
-		fmt.Println("Warning: Timed out waiting for output readers to complete")
+		logger.Warn("Timed out waiting for output readers to complete")
 	}
 
 	// Wait for the process to finish with a timeout
@@ -176,18 +189,21 @@ func (sm *ServerManager) Disconnect() error {
 				if !strings.Contains(err.Error(), "process already finished") &&
 					!strings.Contains(err.Error(), "signal: killed") {
 					sm.setStatus(ConnectionError)
+					logger.Error("Error waiting for srvrmgr process to exit", zap.Error(err))
 					return fmt.Errorf("error while waiting for srvrmgr process to exit: %v", err)
 				}
 			}
 		case <-time.After(3 * time.Second):
 			if sm.cmd != nil && sm.cmd.Process != nil {
 				// Force kill if wait takes too long
+				logger.Warn("Timed out waiting for srvrmgr process to exit, forcing kill")
 				sm.cmd.Process.Kill()
 			}
 		}
 	}
 
 	sm.setStatus(Disconnected)
+	logger.Info("Disconnected from Siebel Server Manager")
 	return nil
 }
 
@@ -202,6 +218,8 @@ func (sm *ServerManager) EnableAutoReconnect(delay time.Duration) {
 	} else if sm.config.ReconnectDelay <= 0 {
 		sm.config.ReconnectDelay = DefaultReconnectDelay
 	}
+
+	logger.Info("Auto-reconnect enabled", zap.Duration("delay", sm.config.ReconnectDelay))
 }
 
 // DisableAutoReconnect disables automatic reconnection
@@ -215,6 +233,8 @@ func (sm *ServerManager) DisableAutoReconnect() {
 		close(sm.stopReconnect)
 		sm.stopReconnect = make(chan struct{})
 	}
+
+	logger.Info("Auto-reconnect disabled")
 }
 
 // cleanupProcess cleans up the existing process without changing user-facing status
@@ -225,9 +245,11 @@ func (sm *ServerManager) cleanupProcess() {
 
 	if cmd != nil && cmd.Process != nil {
 		// Try to kill the process
+		logger.Debug("Cleaning up process")
 		_ = cmd.Process.Kill()
 	}
 
 	// Wait for output readers to complete
 	sm.reconnectWg.Wait()
+	logger.Debug("Process cleanup completed")
 }
