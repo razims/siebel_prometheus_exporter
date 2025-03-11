@@ -2,16 +2,18 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/razims/siebel_exporter/pkg/exporter"
-	"github.com/razims/siebel_exporter/pkg/logger"
-	"github.com/razims/siebel_exporter/pkg/servermanager"
+	"github.com/razims/siebel_prometheus_exporter/pkg/exporter"
+	"github.com/razims/siebel_prometheus_exporter/pkg/logger"
+	"github.com/razims/siebel_prometheus_exporter/pkg/servermanager"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +35,7 @@ var (
 	disableExtendedMetrics      = flag.Bool("siebel.disable-extended-metrics", false, "Disable any metric defined as 'Extended' in metrics file.")
 	autoReconnect               = flag.Bool("siebel.auto-reconnect", true, "Enable automatic reconnection if connection is lost.")
 	reconnectDelay              = flag.Duration("siebel.reconnect-delay", 10*time.Second, "Delay between reconnection attempts.")
+	reconnectAfterScrape        = flag.Bool("siebel.reconnect-after-scrape", false, "Reconnect to server after each scrape")
 	logLevel                    = flag.String("log.level", "info", "Log level (debug, info, warn, error)")
 )
 
@@ -42,17 +45,42 @@ func main() {
 	// Set GOMAXPROCS if specified
 	if *maxProcs > 0 {
 		runtime.GOMAXPROCS(*maxProcs)
-		logger.Info("Set GOMAXPROCS", zap.Int("value", *maxProcs))
+		fmt.Printf("Set GOMAXPROCS to %d\n", *maxProcs)
 	} else {
 		cpus := runtime.NumCPU()
-		logger.Info("Using default GOMAXPROCS", zap.Int("cpus", cpus))
+		fmt.Printf("Using default GOMAXPROCS (%d CPUs)\n", cpus)
 	}
 
 	// Initialize logger with specified level
-	logger.Init(logger.Level(*logLevel))
+	fmt.Printf("Initializing logger with level: %s\n", *logLevel)
+
+	// Validate the log level before passing it to logger.Init
+	validLogLevels := map[string]bool{
+		"debug": true,
+		"info":  true,
+		"warn":  true,
+		"error": true,
+		"panic": true,
+		"fatal": true,
+	}
+
+	// Convert input to lowercase for comparison
+	normalizedLevel := strings.ToLower(*logLevel)
+
+	if _, valid := validLogLevels[normalizedLevel]; !valid {
+		fmt.Printf("Warning: Invalid log level '%s', defaulting to 'info'\n", *logLevel)
+		normalizedLevel = "info"
+	}
+
+	// Initialize the logger with the validated level
+	logger.Init(logger.Level(normalizedLevel))
 	defer logger.Sync()
 
-	logger.Info("Starting Siebel Exporter")
+	logger.Info("Starting Siebel Exporter",
+		zap.String("logLevel", normalizedLevel))
+
+	// Test log level
+	logger.Debug("This is a DEBUG message - you should see this if debug level is enabled")
 
 	// Create a ServerManagerConfig from command line arguments
 	smConfig := servermanager.ServerManagerConfig{
@@ -64,6 +92,7 @@ func main() {
 		SrvrmgrPath:    *srvrmgrPath,
 		AutoReconnect:  *autoReconnect,
 		ReconnectDelay: *reconnectDelay,
+		BackoffConfig:  servermanager.DefaultBackoffConfig,
 	}
 
 	// Validate configuration
@@ -89,8 +118,16 @@ func main() {
 	}
 	logger.Info("Successfully connected to Siebel Server Manager")
 
-	// Create exporter - use the same file for both default and custom metrics
-	siebelExporter := exporter.NewExporter(sm, *metricsFile, "", *dateFormat, *disableEmptyMetricsOverride, *disableExtendedMetrics, &smConfig)
+	// Create exporter
+	siebelExporter := exporter.NewExporter(
+		sm,
+		*metricsFile,
+		*dateFormat,
+		*disableEmptyMetricsOverride,
+		*disableExtendedMetrics,
+		*reconnectAfterScrape,
+		&smConfig,
+	)
 
 	// Create a new registry
 	registry := prometheus.NewRegistry()

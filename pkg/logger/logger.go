@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -38,22 +40,29 @@ func Init(level Level) {
 	once.Do(func() {
 		// Parse log level
 		var zapLevel zapcore.Level
-		switch level {
-		case DebugLevel:
+
+		// Add more explicit logging about the requested level
+		fmt.Printf("Initializing logger with requested level: %s\n", string(level))
+
+		switch strings.ToLower(string(level)) {
+		case "debug":
 			zapLevel = zapcore.DebugLevel
-		case InfoLevel:
+		case "info":
 			zapLevel = zapcore.InfoLevel
-		case WarnLevel:
+		case "warn":
 			zapLevel = zapcore.WarnLevel
-		case ErrorLevel:
+		case "error":
 			zapLevel = zapcore.ErrorLevel
-		case PanicLevel:
+		case "panic":
 			zapLevel = zapcore.PanicLevel
-		case FatalLevel:
+		case "fatal":
 			zapLevel = zapcore.FatalLevel
 		default:
+			fmt.Printf("Unknown log level: '%s', defaulting to info\n", string(level))
 			zapLevel = zapcore.InfoLevel
 		}
+
+		fmt.Printf("Logger will use zapcore level: %s\n", zapLevel.String())
 
 		// Create encoder configuration
 		encoderConfig := zapcore.EncoderConfig{
@@ -81,6 +90,13 @@ func Init(level Level) {
 		// Create logger
 		Log = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 		Sugar = Log.Sugar()
+
+		// Log the initialization at the level that was set
+		if zapLevel == zapcore.DebugLevel {
+			Log.Debug("Logger initialized with debug level")
+		} else {
+			Log.Info("Logger initialized", zap.String("level", zapLevel.String()))
+		}
 	})
 }
 

@@ -5,23 +5,30 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/razims/siebel_exporter/pkg/logger"
-	"github.com/razims/siebel_exporter/pkg/servermanager"
+	"github.com/razims/siebel_prometheus_exporter/pkg/logger"
+	"github.com/razims/siebel_prometheus_exporter/pkg/servermanager"
 	"go.uber.org/zap"
 )
 
 // NewExporter returns a new Siebel exporter for the provided args.
 // The ServerManager parameter is already a pointer, so it should be passed directly
-func NewExporter(srvrmgr *servermanager.ServerManager, defaultMetricsFile, customMetricsFile, dateFormat string, disableEmptyMetricsOverride, disableExtendedMetrics bool, config *servermanager.ServerManagerConfig) *Exporter {
-	logger.Debug("Creating new exporter")
+func NewExporter(srvrmgr *servermanager.ServerManager,
+	metricsFile string,
+	dateFormat string,
+	disableEmptyMetricsOverride bool,
+	disableExtendedMetrics bool,
+	reconnectAfterScrape bool,
+	config *servermanager.ServerManagerConfig) *Exporter {
+	logger.Debug("Creating new exporter",
+		zap.String("metricsFile", metricsFile))
 
 	const (
 		namespace = "siebel"
 		subsystem = "exporter"
 	)
 
-	// Load default and custom metrics
-	reloadMetrics(defaultMetricsFile, customMetricsFile)
+	// Load metrics from file
+	loadMetrics(metricsFile)
 
 	return &Exporter{
 		namespace:                   namespace,
@@ -29,8 +36,8 @@ func NewExporter(srvrmgr *servermanager.ServerManager, defaultMetricsFile, custo
 		dateFormat:                  dateFormat,
 		disableEmptyMetricsOverride: disableEmptyMetricsOverride,
 		disableExtendedMetrics:      disableExtendedMetrics,
-		defaultMetricsFile:          defaultMetricsFile,
-		customMetricsFile:           customMetricsFile,
+		reconnectAfterScrape:        reconnectAfterScrape,
+		metricsFile:                 metricsFile,
 		srvrmgr:                     srvrmgr,
 		srvrmgrConfig:               config,
 		duration: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -67,6 +74,24 @@ func NewExporter(srvrmgr *servermanager.ServerManager, defaultMetricsFile, custo
 			Name:      "application_server_up",
 			Help:      "Whether the Siebel Application Server is up (1 for up, 0 for down).",
 		}),
+		reconnectsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "reconnects_total",
+			Help:      "Total number of reconnections performed.",
+		}),
+		reconnectErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "reconnect_errors_total",
+			Help:      "Total number of reconnection errors.",
+		}),
+		lastReconnectDuration: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "last_reconnect_duration_seconds",
+			Help:      "Duration of the last reconnection attempt in seconds.",
+		}),
 	}
 }
 
@@ -99,6 +124,11 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.scrapeErrors.Collect(ch)
 	ch <- e.gatewayServerUp
 	ch <- e.applicationServerUp
+
+	// Emit reconnection metrics
+	e.reconnectsTotal.Collect(ch)
+	e.reconnectErrors.Collect(ch)
+	ch <- e.lastReconnectDuration
 }
 
 func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
@@ -132,7 +162,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	}
 	e.applicationServerUp.Set(1)
 
-	reloadMetricsIfItChanged(e.defaultMetricsFile, e.customMetricsFile)
+	reloadMetricsIfItChanged(e.metricsFile)
 
 	for _, metric := range defaultMetrics.Metric {
 		logMetricDesc(metric)
@@ -161,6 +191,36 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 				zap.Any("help", metric.Help),
 				zap.Duration("duration", scrapeEnd))
 		}
+	}
+
+	// If reconnectAfterScrape is enabled, reconnect to the server
+	if e.reconnectAfterScrape {
+		logger.Info("Reconnecting after scrape as configured")
+		reconnectStart := time.Now()
+		e.reconnectsTotal.Inc()
+
+		// First disconnect
+		disconnectErr := e.srvrmgr.Disconnect()
+		if disconnectErr != nil {
+			logger.Warn("Error during disconnect for after-scrape reconnection",
+				zap.Error(disconnectErr))
+			// Continue with reconnect anyway
+		}
+
+		// Short pause to ensure clean disconnection
+		time.Sleep(1 * time.Second)
+
+		// Now reconnect
+		if reconnectErr := e.srvrmgr.Connect(); reconnectErr != nil {
+			logger.Error("Failed to reconnect after scrape", zap.Error(reconnectErr))
+			e.reconnectErrors.Inc()
+			e.error.Set(1)
+		} else {
+			logger.Info("Successfully reconnected after scrape")
+		}
+
+		// Record reconnection duration
+		e.lastReconnectDuration.Set(time.Since(reconnectStart).Seconds())
 	}
 }
 

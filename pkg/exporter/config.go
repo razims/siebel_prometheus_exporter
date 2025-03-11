@@ -2,7 +2,7 @@ package exporter
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/razims/siebel_exporter/pkg/servermanager"
+	"github.com/razims/siebel_prometheus_exporter/pkg/servermanager"
 )
 
 // Metric object description
@@ -32,8 +32,8 @@ type Exporter struct {
 	dateFormat                  string
 	disableEmptyMetricsOverride bool
 	disableExtendedMetrics      bool
-	defaultMetricsFile          string
-	customMetricsFile           string
+	reconnectAfterScrape        bool
+	metricsFile                 string
 	srvrmgr                     *servermanager.ServerManager
 	srvrmgrConfig               *servermanager.ServerManagerConfig
 	duration, error             prometheus.Gauge
@@ -41,10 +41,13 @@ type Exporter struct {
 	scrapeErrors                prometheus.Counter
 	gatewayServerUp             prometheus.Gauge
 	applicationServerUp         prometheus.Gauge
+	// Reconnection metrics
+	reconnectsTotal       prometheus.Counter
+	reconnectErrors       prometheus.Counter
+	lastReconnectDuration prometheus.Gauge
 }
 
 var (
-	defaultMetrics Metrics                // Default metrics to scrap. Use external file (default-metrics.toml)
-	customMetrics  Metrics                // Custom metrics to scrap. Use custom external file (if provided)
+	defaultMetrics Metrics                // Default metrics to scrap
 	metricsHashMap = make(map[int][]byte) // Metrics Files HashMap
 )

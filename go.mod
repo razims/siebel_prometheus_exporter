@@ -1,4 +1,4 @@
-module github.com/razims/siebel_exporter
+module github.com/razims/siebel_prometheus_exporter
 
 go 1.24
 

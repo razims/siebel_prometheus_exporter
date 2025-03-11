@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/razims/siebel_exporter/pkg/logger"
+	"github.com/razims/siebel_prometheus_exporter/pkg/logger"
 	"go.uber.org/zap"
 )
 
