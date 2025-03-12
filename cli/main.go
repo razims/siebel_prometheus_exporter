@@ -3,17 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"runtime"
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/razims/siebel_prometheus_exporter/pkg/exporter"
 	"github.com/razims/siebel_prometheus_exporter/pkg/logger"
 	"github.com/razims/siebel_prometheus_exporter/pkg/servermanager"
+	"github.com/razims/siebel_prometheus_exporter/pkg/web"
 	"go.uber.org/zap"
 )
 
@@ -22,6 +20,7 @@ var (
 	listenAddress               = flag.String("web.listen-address", "0.0.0.0:9963", "Address to listen on for web interface and telemetry.")
 	metricsPath                 = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
 	disableExporterMetrics      = flag.Bool("web.disable-exporter-metrics", false, "Exclude metrics about the exporter itself (promhttp_*, process_*, go_*).")
+	disableLogs                 = flag.Bool("web.disable-logs", false, "Disable the /logs endpoint and in-memory log storage.")
 	maxProcs                    = flag.Int("runtime.gomaxprocs", 0, "The target number of CPUs Go will run on (GOMAXPROCS). 0 means use default (number of logical CPUs).")
 	gateway                     = flag.String("siebel.gateway", "", "Siebel Gateway server address.")
 	enterprise                  = flag.String("siebel.enterprise", "", "Siebel Enterprise name.")
@@ -72,6 +71,9 @@ func main() {
 		normalizedLevel = "info"
 	}
 
+	// Set disabled logs flag before initializing logger
+	logger.SetDisableLogs(*disableLogs)
+
 	// Initialize the logger with the validated level
 	logger.Init(logger.Level(normalizedLevel))
 	defer logger.Sync()
@@ -118,60 +120,30 @@ func main() {
 	}
 	logger.Info("Successfully connected to Siebel Server Manager")
 
-	// Create exporter
-	siebelExporter := exporter.NewExporter(
-		sm,
-		*metricsFile,
-		*dateFormat,
-		*disableEmptyMetricsOverride,
-		*disableExtendedMetrics,
-		*reconnectAfterScrape,
-		&smConfig,
-	)
-
-	// Create a new registry
-	registry := prometheus.NewRegistry()
-
-	// Register Siebel exporter
-	registry.MustRegister(siebelExporter)
-
-	// If not disabled, register Go collector and process collector
-	if !*disableExporterMetrics {
-		registry.MustRegister(prometheus.NewGoCollector())
-		registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-		registry.MustRegister(prometheus.NewBuildInfoCollector())
-		logger.Info("Registered standard exporters")
-	} else {
-		logger.Info("Standard exporters disabled")
+	// Create exporter configuration
+	exporterConfig := &exporter.ExporterConfig{
+		ServerManagerConfig:         &smConfig,
+		MetricsFile:                 *metricsFile,
+		DateFormat:                  *dateFormat,
+		DisableEmptyMetricsOverride: *disableEmptyMetricsOverride,
+		DisableExtendedMetrics:      *disableExtendedMetrics,
+		ReconnectAfterScrape:        *reconnectAfterScrape,
 	}
 
-	// Setup HTTP server
-	http.Handle(*metricsPath, promhttp.HandlerFor(
-		registry,
-		promhttp.HandlerOpts{
-			EnableOpenMetrics: true,
-		},
-	))
+	// Create exporter
+	siebelExporter := exporter.NewExporter(sm, exporterConfig)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
-<head><title>Siebel Exporter</title></head>
-<body>
-<h1>Siebel Exporter</h1>
-<p><a href="` + *metricsPath + `">Metrics</a></p>
-<p>
-  <h3>Metrics collected:</h3>
-  <ul>
-    <li>Siebel Server Status</li>
-    <li>Component Groups Status</li>
-    <li>Components Status &amp; Tasks</li>
-    <li>Server Statistics</li>
-    <li>Server State Values</li>
-  </ul>
-</p>
-</body>
-</html>`))
-	})
+	// Create web server config
+	webConfig := web.ServerConfig{
+		ListenAddress:          *listenAddress,
+		MetricsPath:            *metricsPath,
+		DisableExporterMetrics: *disableExporterMetrics,
+		DisableLogs:            *disableLogs,
+	}
+
+	// Create and start web server
+	webServer := web.NewServer(webConfig, &smConfig, exporterConfig, normalizedLevel)
+	webServer.RegisterExporter(siebelExporter)
 
 	// Setup shutdown hook to disconnect ServerManager on exit
 	defer func() {
@@ -181,9 +153,6 @@ func main() {
 		}
 	}()
 
-	logger.Info("Starting HTTP server",
-		zap.String("address", *listenAddress),
-		zap.String("metricsPath", *metricsPath),
-		zap.Bool("exporterMetricsDisabled", *disableExporterMetrics))
-	logger.Error("HTTP server error", zap.Error(http.ListenAndServe(*listenAddress, nil)))
+	// Start web server (this blocks until server shutdown)
+	logger.Error("HTTP server error", zap.Error(webServer.Start()))
 }

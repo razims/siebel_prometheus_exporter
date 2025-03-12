@@ -104,60 +104,75 @@ func Init(level Level) {
 func Debug(msg string, fields ...zap.Field) {
 	ensureLogger()
 	Log.Debug(msg, fields...)
+	AddLogEntry("DEBUG", formatLogMessage(msg, fields))
 }
 
 // Info logs a message at info level
 func Info(msg string, fields ...zap.Field) {
 	ensureLogger()
 	Log.Info(msg, fields...)
+	AddLogEntry("INFO", formatLogMessage(msg, fields))
 }
 
 // Warn logs a message at warn level
 func Warn(msg string, fields ...zap.Field) {
 	ensureLogger()
 	Log.Warn(msg, fields...)
+	AddLogEntry("WARN", formatLogMessage(msg, fields))
 }
 
 // Error logs a message at error level
 func Error(msg string, fields ...zap.Field) {
 	ensureLogger()
 	Log.Error(msg, fields...)
+	AddLogEntry("ERROR", formatLogMessage(msg, fields))
 }
 
 // Fatal logs a message at fatal level and then calls os.Exit(1)
 func Fatal(msg string, fields ...zap.Field) {
 	ensureLogger()
 	Log.Fatal(msg, fields...)
+	AddLogEntry("FATAL", formatLogMessage(msg, fields))
 }
 
 // Debugf logs a formatted message at debug level
 func Debugf(format string, args ...interface{}) {
 	ensureLogger()
 	Sugar.Debugf(format, args...)
+	formattedMsg := fmt.Sprintf(format, args...)
+	AddLogEntry("DEBUG", formattedMsg)
 }
 
 // Infof logs a formatted message at info level
 func Infof(format string, args ...interface{}) {
 	ensureLogger()
 	Sugar.Infof(format, args...)
+	formattedMsg := fmt.Sprintf(format, args...)
+	AddLogEntry("INFO", formattedMsg)
 }
 
 // Warnf logs a formatted message at warn level
 func Warnf(format string, args ...interface{}) {
 	ensureLogger()
 	Sugar.Warnf(format, args...)
+	formattedMsg := fmt.Sprintf(format, args...)
+	AddLogEntry("WARN", formattedMsg)
 }
 
 // Errorf logs a formatted message at error level
 func Errorf(format string, args ...interface{}) {
 	ensureLogger()
 	Sugar.Errorf(format, args...)
+	formattedMsg := fmt.Sprintf(format, args...)
+	AddLogEntry("ERROR", formattedMsg)
 }
 
 // Fatalf logs a formatted message at fatal level and then calls os.Exit(1)
 func Fatalf(format string, args ...interface{}) {
 	ensureLogger()
 	Sugar.Fatalf(format, args...)
+	formattedMsg := fmt.Sprintf(format, args...)
+	AddLogEntry("FATAL", formattedMsg)
 }
 
 // With creates a child logger with the given fields added to it
@@ -185,4 +200,25 @@ func Sync() error {
 		return Log.Sync()
 	}
 	return nil
+}
+
+// Format log message with fields for the buffer
+func formatLogMessage(msg string, fields []zap.Field) string {
+	if len(fields) == 0 {
+		return msg
+	}
+
+	var fieldsStr string
+	for _, field := range fields {
+		// Simple formatter - in a real implementation, you'd want to handle
+		// different field types more carefully
+		fieldsStr += fmt.Sprintf(" %s=%v", field.Key, field.Interface)
+	}
+
+	return msg + fieldsStr
+}
+
+// SetDisableLogs sets whether in-memory logging should be disabled
+func SetDisableLogs(disable bool) {
+	disableLogs = disable
 }

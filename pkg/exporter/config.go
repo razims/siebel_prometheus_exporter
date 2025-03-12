@@ -5,6 +5,33 @@ import (
 	"github.com/razims/siebel_prometheus_exporter/pkg/servermanager"
 )
 
+// ExporterConfig contains all configuration parameters for the Exporter
+type ExporterConfig struct {
+	// Siebel server connection config (directly from server manager)
+	ServerManagerConfig *servermanager.ServerManagerConfig
+
+	// Metrics configuration
+	MetricsFile string
+	DateFormat  string
+
+	// Behavior configuration
+	DisableEmptyMetricsOverride bool
+	DisableExtendedMetrics      bool
+	ReconnectAfterScrape        bool
+}
+
+// NewDefaultExporterConfig creates a new ExporterConfig with default values
+func NewDefaultExporterConfig() *ExporterConfig {
+	return &ExporterConfig{
+		ServerManagerConfig:         &servermanager.ServerManagerConfig{},
+		MetricsFile:                 "metrics.toml",
+		DateFormat:                  "2006-01-02 15:04:05",
+		DisableEmptyMetricsOverride: false,
+		DisableExtendedMetrics:      false,
+		ReconnectAfterScrape:        false,
+	}
+}
+
 // Metric object description
 type Metric struct {
 	Command          string
@@ -27,21 +54,15 @@ type Metrics struct {
 
 // Exporter collects Siebel metrics. It implements prometheus.Collector.
 type Exporter struct {
-	namespace                   string
-	subsystem                   string
-	dateFormat                  string
-	disableEmptyMetricsOverride bool
-	disableExtendedMetrics      bool
-	reconnectAfterScrape        bool
-	metricsFile                 string
-	srvrmgr                     *servermanager.ServerManager
-	srvrmgrConfig               *servermanager.ServerManagerConfig
-	duration, error             prometheus.Gauge
-	totalScrapes                prometheus.Counter
-	scrapeErrors                prometheus.Counter
-	gatewayServerUp             prometheus.Gauge
-	applicationServerUp         prometheus.Gauge
-	// Reconnection metrics
+	namespace             string
+	subsystem             string
+	config                *ExporterConfig
+	srvrmgr               *servermanager.ServerManager
+	duration, error       prometheus.Gauge
+	totalScrapes          prometheus.Counter
+	scrapeErrors          prometheus.Counter
+	gatewayServerUp       prometheus.Gauge
+	applicationServerUp   prometheus.Gauge
 	reconnectsTotal       prometheus.Counter
 	reconnectErrors       prometheus.Counter
 	lastReconnectDuration prometheus.Gauge

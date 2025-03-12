@@ -208,41 +208,60 @@ func (sm *ServerManager) Disconnect() error {
 		return nil
 	}
 
+	// Create local references to avoid holding lock
+	cmd := sm.cmd
 	sm.status = Disconnecting
 	sm.mu.Unlock()
 
 	logger.Info("Disconnecting from Siebel Server Manager", zap.String("previousStatus", string(currentStatus)))
 
-	// Try to send exit command with short timeout
-	// Ignore pipe errors since we're disconnecting anyway
-	logger.Debug("Sending exit command to srvrmgr")
-	_, err := sm.SendCommandWithTimeout("exit", 5*time.Second)
-	if err != nil {
-		logger.Debug("Exit command error (expected during disconnect)", zap.Error(err))
-	} else {
-		logger.Debug("Exit command sent successfully")
+	// First try to send exit command with very short timeout
+	exitSuccessful := false
+	if cmd != nil && cmd.Process != nil {
+		logger.Debug("Attempting graceful exit via exit command")
+
+		// Try to send exit command with short timeout
+		_, err := sm.SendCommandWithTimeout("exit", 1*time.Second)
+		if err != nil {
+			logger.Debug("Exit command failed (continuing with kill)", zap.Error(err))
+		} else {
+			logger.Debug("Exit command sent successfully, waiting briefly for termination")
+			exitSuccessful = true
+
+			// Give the process a brief moment to exit gracefully
+			exitWaitChan := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(exitWaitChan)
+			}()
+
+			// Wait up to 1 second for graceful exit
+			select {
+			case <-exitWaitChan:
+				logger.Debug("Process exited gracefully after exit command")
+				sm.setStatus(Disconnected)
+				return nil
+			case <-time.After(1 * time.Second):
+				logger.Debug("Process did not exit after exit command, proceeding to kill")
+			}
+		}
 	}
 
-	// Always attempt to kill the process whether exit command succeeds or fails
-	// This ensures we clean up properly even if the pipe is already closed
-	if sm.cmd != nil && sm.cmd.Process != nil {
-		// Kill the process if it doesn't exit gracefully or to ensure termination
-		logger.Debug("Killing srvrmgr process", zap.Int("pid", sm.cmd.Process.Pid))
-		killErr := sm.cmd.Process.Kill()
-		if killErr != nil && err == nil {
-			// Only report kill errors if the exit command succeeded
-			logger.Error("Failed to kill srvrmgr process", zap.Error(killErr))
-			sm.setStatus(ConnectionError)
-			return fmt.Errorf("failed to kill srvrmgr process: %v", killErr)
-		}
-		if killErr == nil {
+	// If graceful exit didn't work, kill the process
+	if cmd != nil && cmd.Process != nil {
+		logger.Debug("Killing srvrmgr process", zap.Int("pid", cmd.Process.Pid))
+		killErr := cmd.Process.Kill()
+		if killErr != nil {
+			logger.Warn("Failed to kill srvrmgr process", zap.Error(killErr))
+			// Continue with cleanup despite the error
+		} else {
 			logger.Debug("Successfully killed srvrmgr process")
 		}
 	} else {
 		logger.Debug("No active srvrmgr process to kill")
 	}
 
-	// Wait for output readers to complete with timeout
+	// Wait for output readers to complete with short timeout
 	logger.Debug("Waiting for output readers to complete")
 	outputWaitChan := make(chan struct{})
 	go func() {
@@ -250,22 +269,21 @@ func (sm *ServerManager) Disconnect() error {
 		close(outputWaitChan)
 	}()
 
-	// Add timeout for waiting on output readers
+	// Add short timeout for waiting on output readers
 	select {
 	case <-outputWaitChan:
-		// Output readers completed successfully
 		logger.Debug("Output readers completed successfully")
-	case <-time.After(3 * time.Second):
-		// Timed out waiting for readers - continue with cleanup
+	case <-time.After(1 * time.Second):
 		logger.Warn("Timed out waiting for output readers to complete")
 	}
 
-	// Wait for the process to finish with a timeout
-	if sm.cmd != nil {
-		logger.Debug("Waiting for srvrmgr process to exit")
+	// If we previously tried an exit command and are still here,
+	// let's wait for the process to finish
+	if exitSuccessful && cmd != nil {
+		logger.Debug("Waiting for srvrmgr process to exit after kill signal")
 		waitChan := make(chan error, 1)
 		go func() {
-			waitChan <- sm.cmd.Wait()
+			waitChan <- cmd.Wait()
 		}()
 
 		select {
@@ -274,20 +292,14 @@ func (sm *ServerManager) Disconnect() error {
 				// Don't fail on expected exit errors (process killed)
 				if !strings.Contains(err.Error(), "process already finished") &&
 					!strings.Contains(err.Error(), "signal: killed") {
-					logger.Error("Error waiting for srvrmgr process to exit", zap.Error(err))
-					sm.setStatus(ConnectionError)
-					return fmt.Errorf("error while waiting for srvrmgr process to exit: %v", err)
+					logger.Warn("Error waiting for srvrmgr process to exit", zap.Error(err))
 				}
 				logger.Debug("srvrmgr process exited with expected error", zap.Error(err))
 			} else {
 				logger.Debug("srvrmgr process exited cleanly")
 			}
-		case <-time.After(3 * time.Second):
-			if sm.cmd != nil && sm.cmd.Process != nil {
-				// Force kill if wait takes too long
-				logger.Warn("Timed out waiting for srvrmgr process to exit, forcing kill")
-				sm.cmd.Process.Kill()
-			}
+		case <-time.After(1 * time.Second):
+			logger.Warn("Timed out waiting for srvrmgr process to exit after kill")
 		}
 	}
 

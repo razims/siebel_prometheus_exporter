@@ -11,16 +11,9 @@ import (
 )
 
 // NewExporter returns a new Siebel exporter for the provided args.
-// The ServerManager parameter is already a pointer, so it should be passed directly
-func NewExporter(srvrmgr *servermanager.ServerManager,
-	metricsFile string,
-	dateFormat string,
-	disableEmptyMetricsOverride bool,
-	disableExtendedMetrics bool,
-	reconnectAfterScrape bool,
-	config *servermanager.ServerManagerConfig) *Exporter {
+func NewExporter(srvrmgr *servermanager.ServerManager, config *ExporterConfig) *Exporter {
 	logger.Debug("Creating new exporter",
-		zap.String("metricsFile", metricsFile))
+		zap.String("metricsFile", config.MetricsFile))
 
 	const (
 		namespace = "siebel"
@@ -28,18 +21,13 @@ func NewExporter(srvrmgr *servermanager.ServerManager,
 	)
 
 	// Load metrics from file
-	loadMetrics(metricsFile)
+	loadMetrics(config.MetricsFile)
 
 	return &Exporter{
-		namespace:                   namespace,
-		subsystem:                   subsystem,
-		dateFormat:                  dateFormat,
-		disableEmptyMetricsOverride: disableEmptyMetricsOverride,
-		disableExtendedMetrics:      disableExtendedMetrics,
-		reconnectAfterScrape:        reconnectAfterScrape,
-		metricsFile:                 metricsFile,
-		srvrmgr:                     srvrmgr,
-		srvrmgrConfig:               config,
+		namespace: namespace,
+		subsystem: subsystem,
+		config:    config,
+		srvrmgr:   srvrmgr,
 		duration: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
@@ -148,7 +136,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 		}
 	}(time.Now())
 
-	if !checkConnection(e.srvrmgr, e.srvrmgrConfig) {
+	if !checkConnection(e.srvrmgr, e.config.ServerManagerConfig) {
 		return
 	}
 
@@ -162,7 +150,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	}
 	e.applicationServerUp.Set(1)
 
-	reloadMetricsIfItChanged(e.metricsFile)
+	reloadMetricsIfItChanged(e.config.MetricsFile)
 
 	for _, metric := range defaultMetrics.Metric {
 		logMetricDesc(metric)
@@ -171,14 +159,14 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 			continue
 		}
 
-		if metric.Extended && e.disableExtendedMetrics {
+		if metric.Extended && e.config.DisableExtendedMetrics {
 			logger.Debug("Skipping extended metric")
 			continue
 		}
 
 		scrapeStart := time.Now()
 
-		if err = scrapeGenericValues(e.namespace, e.dateFormat, e.disableEmptyMetricsOverride, e.srvrmgr, &ch, metric); err != nil {
+		if err = scrapeGenericValues(e.namespace, e.config.DateFormat, e.config.DisableEmptyMetricsOverride, e.srvrmgr, &ch, metric); err != nil {
 			logger.Error("Error scraping metric",
 				zap.String("subsystem", metric.Subsystem),
 				zap.Any("help", metric.Help),
@@ -194,7 +182,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	}
 
 	// If reconnectAfterScrape is enabled, reconnect to the server
-	if e.reconnectAfterScrape {
+	if e.config.ReconnectAfterScrape {
 		logger.Info("Reconnecting after scrape as configured")
 		reconnectStart := time.Now()
 		e.reconnectsTotal.Inc()
