@@ -26,7 +26,7 @@ This project was inspired by [barkadron/siebel_exporter](https://github.com/bark
 
 ### Using pre-built binaries
 
-Download the latest release from the [Releases](https://github.com/razims/siebel_exporter/releases) page.
+Download the latest release from the [Releases](https://github.com/razims/siebel_prometheus_exporter/releases) page.
 
 ### Building from source
 
