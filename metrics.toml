@@ -77,5 +77,9 @@ CURR_VAL = "Current value of the Siebel Application Server State Value."
 [Metric.HelpField]
 CURR_VAL = "VD_DESC"
 
-
-
+[[Metric]]
+Command = "list active sessions show CC_ALIAS, OM_LOGIN, TK_TASKID, TK_PID"
+Subsystem = "list_active_sessions"
+Labels = [ "CC_ALIAS", "OM_LOGIN", "TK_PID" ]
+[Metric.Help]
+TK_TASKID = 'IDs of the sessions in Siebel Application Server.'
